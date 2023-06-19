@@ -3,20 +3,32 @@
 #include "Blit3D.h"
 
 #include <random>
-#include "Physics.h"
 
-class Ball
+#include "Physics.h"
+#include "GameSprites.h"
+#include "Entity.h"
+
+
+class Ball : public Entity
 {
 public:
 	b2Body* body = NULL; //the physics body for the ball
 	Sprite* sprite = NULL;
 
-	Ball(Sprite* theSprite, float diameter, 
-		float xpos, float ypos,
-		float density = 1.f, float friction = 0.5f, float restitution = 0.5f,
-		float angularDamping = 1.8f);
+	boolean isDrawn = true;
+
+	Ball()
+	{
+		typeID = ENTITY_BALL;
+	};
 	void Draw();
+	void Destroy();
 };
 
+Ball* MakeBall(Sprite* theSprite, float diameter,
+	float xpos, float ypos,
+	float density, float friction, float restitution,
+	float angularDamping);
 void KickBall(Ball* ball);
 void KickBallUpAndToTheSide(Ball* ball);
+std::vector<Ball*> MultilplyToThree(std::vector<Ball*> balls, GameSprites* sprites);

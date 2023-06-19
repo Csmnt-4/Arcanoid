@@ -9,7 +9,7 @@ b2Vec2 rad2vec(float r, float m)
 
 b2Vec2 deg2vec(float r, float m)
 {
-	return rad2vec(r*DEG2RAD, m);
+	return rad2vec(r * DEG2RAD, m);
 };
 
 float vec2rad(b2Vec2 v)
@@ -19,7 +19,7 @@ float vec2rad(b2Vec2 v)
 
 float vec2deg(b2Vec2 v)
 {
-	return vec2rad(v)*RAD2DEG;
+	return vec2rad(v) * RAD2DEG;
 };
 
 float rad2deg(float r)

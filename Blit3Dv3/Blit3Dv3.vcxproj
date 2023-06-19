@@ -185,21 +185,29 @@
     <ClCompile Include="Blit3DBaseFiles\GLFW\win32_tls.c" />
     <ClCompile Include="Blit3DBaseFiles\GLFW\win32_window.c" />
     <ClCompile Include="Blit3DBaseFiles\GLFW\window.c" />
+    <ClCompile Include="ContactListener.cpp" />
     <ClCompile Include="DieRoller.cpp" />
+    <ClCompile Include="Entity.cpp" />
     <ClCompile Include="GameSprites.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="Particle.cpp" />
     <ClCompile Include="Physics.cpp" />
-    <ClCompile Include="Rectangle.cpp" />
-    <ClCompile Include="Rectangle.h" />
+    <ClCompile Include="Brick.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Ball.h" />
     <ClInclude Include="Blit3DBaseFiles\GLEW\GL\glew.h" />
     <ClInclude Include="Blit3DBaseFiles\GLEW\GL\wglew.h" />
+    <ClInclude Include="Brick.h" />
     <ClInclude Include="Camera.h" />
+    <ClInclude Include="CollisionMasks.h" />
+    <ClInclude Include="ContactListener.h" />
     <ClInclude Include="DieRoller.h" />
+    <ClInclude Include="Entity.h" />
     <ClInclude Include="GameSprites.h" />
+    <ClInclude Include="Particle.h" />
     <ClInclude Include="Physics.h" />
+    <ClInclude Include="Types.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -2,6 +2,10 @@
 
 #include "Blit3D.h"
 
+// Credits:
+// Original blocks sprites - Pavel Kutejnikov
+// Original explosion VFX - CodeManu
+
 class GameSprites
 {
 public:
@@ -19,6 +23,11 @@ public:
 	std::vector<Sprite*> mossyHorizontalLongPlatformSprites;
 
 	std::vector<Sprite*> mossyVerticalLongPlatformSprites;
+
+	std::vector<Sprite*> collisionParticles;
+
+	Sprite* intro;
+	Sprite* outro;
 
 	GameSprites(Blit3D* blit3D);
 };

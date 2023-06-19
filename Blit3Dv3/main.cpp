@@ -1,6 +1,3 @@
-/*
-	Example program that demonstrates simple physics using Box2D
-*/
 #include "Blit3D.h"
 
 #include <random>
@@ -13,14 +10,19 @@ Blit3D* blit3D = NULL;
 #include <stdlib.h>
 #include <crtdbg.h>
 
-#include "Rectangle.h"
+#include "Brick.h"
 #include "Ball.h"
 
 #include "GameSprites.h"
 #include "Camera.h"
+#include "CollisionMasks.h"
+#include "Particle.h"
+#include "ContactListener.h"
+#include "DieRoller.h"
 
 //GLOBAL DATA
 std::mt19937 rng;
+DiceRoller dice;
 
 //Box2D does not use glm::vec2, but instead provides b2Vec2, a similiar
 //2d vector object
@@ -28,8 +30,28 @@ b2Vec2 gravity; //defines our gravity vector
 b2World* world = NULL; //our physics engine
 
 b2Body* groundBody = NULL; //the physics body for the screen edges
+
+//all game sprites
+GameSprites* sprites;
+
+//contact listener to handle collisions between important objects
+ContactListener* contactListener;
+
+//camera
+Camera2D* camera = NULL;
+
+//coursor
+glm::vec2 cursor;
+
+//font
+AngelcodeFont* debugFont = NULL;
+
+//objects
 std::vector<Ball*> balls;
 std::vector<Brick*> bricks;
+std::vector<Brick*> platforms;
+std::vector<Brick*> powerups;
+std::vector<Particle*> particles;
 
 // Prepare for simulation. Typically we use a time step of 1/60 of a
 // second (60Hz) and ~10 iterations. This provides a high quality simulation
@@ -40,38 +62,78 @@ int32 positionIterations = 3;
 float timeStep = 1.f / 60.f; //one 60th of a second
 float elapsedTime = 0; //used for calculating time passed
 
-bool kickBall = false; //tracks whether we should apply a kick to the ball next update
-
 //game state configuration
-enum GameState { START, PLAYING, GAMEOVER };
+enum GameState { START = 0, PLAYING, GAMEOVER };
 GameState gameState = START;
-//camera
-Camera2D* camera = NULL;
 
-//coursor
-glm::vec2 cursor;
-
-//font
-AngelcodeFont* debugFont = NULL;
-
-//ball and platform
-Ball* theBall = NULL;
-Brick* theBrick = NULL;
-
-int lives = 3;
+int playerLives = 3;
 int playerScore = 0;
 int levelNumber = 1;
-boolean stickToYourPlatform = true;
-boolean nextLevel = true;
-boolean nextLevelAvailable = true;
 
-//Sprites
-GameSprites* sprites;
+//flags for operations
+bool kickBall = false; //tracks whether we should apply a kick to the ball next update
+bool stickToYourPlatform = true; //tracks whether we should move the ball with the platform
+bool nextLevel = true; //tracks whether we should proceed to the next level
+bool nextLevelAvailable = false; //tracks whether user can manually proceed
+bool multipleBalls = false; //tracks whether we should apply "multiply balls" power-up
+bool multiplePlatforms = false; //tracks whether we should put a second platform power-up
+bool inclineLeft = false; //tracks the platform incline
+bool inclineRight = false;
+
+// erases existing instances of balls in the world and creates one
+void EraseBalls()
+{
+	// cleaning
+	for (int i = balls.size() - 1; i >= 0; --i)
+	{
+		world->DestroyBody(balls[i]->body);
+		delete balls[i];
+		balls.erase(balls.begin() + i);
+	}
+	balls.clear();
+
+	// setting the ball "at the platform", as we will need to shoot it
+	stickToYourPlatform = true;
+	balls.push_back(MakeBall(sprites->ballSprites.at(0), 24.f, 50.f, 100.f,
+		1.f, 0.0f, 1.2f, 0.f));
+}
+
 void ProceedToNextLevel()
 {
-	levelNumber++;
+	// remove the flags
+	nextLevelAvailable = false;
+	multiplePlatforms = false;
+	platforms.at(1)->Destroy();
+
 	std::string level = "Levels\\" + std::to_string(levelNumber);
-	level += ".lvl";
+
+	// there are only 3 levels and then the player moves to an "infinite" mode
+	if (levelNumber <= 4)
+	{
+		level += ".lvl";
+		levelNumber++;
+	}
+	else
+	{
+		level = "random";
+	}
+
+	for (int i = bricks.size() - 1; i >= 0; --i)
+	{
+		world->DestroyBody(bricks[i]->body);
+		delete bricks[i];
+		bricks.erase(bricks.begin() + i);
+	}
+
+	for (int i = powerups.size() - 1; i >= 0; --i)
+	{
+		world->DestroyBody(powerups[i]->body);
+		delete powerups[i];
+		powerups.erase(powerups.begin() + i);
+	}
+
+	EraseBalls();
+
 	bricks.clear();
 	bricks = ReadBricksFromFile(level, sprites);
 }
@@ -84,7 +146,7 @@ b2Body* CreateWindowEdges(int windowWidth, int windowHeight, b2World* world)
 	groundBodyDef.position.Set(0, 0);
 
 	// Call the body factory which allocates memory for the ground body
-	// from a pool and creates the ground box shape (also from a pool).
+	// from a pool and creates the ground box shape (also from a pool).adadada
 	// The body is also added to the world.
 	b2Body* groundBody = world->CreateBody(&groundBodyDef);
 
@@ -93,6 +155,9 @@ b2Body* CreateWindowEdges(int windowWidth, int windowHeight, b2World* world)
 
 	// Define the ground as 4 edge shapes around the edge of the screen.
 	b2FixtureDef boxShapeDef;
+
+	boxShapeDef.filter.categoryBits = CMASK_EDGES;  //this is the edges/top
+	boxShapeDef.filter.maskBits = CMASK_BALL;		//it collides wth balls
 
 	boxShapeDef.shape = &groundBox;
 
@@ -122,9 +187,7 @@ void Init()
 {
 	//make a camera
 	camera = new Camera2D();
-
-	std::random_device rd;
-	rng.seed(rd());
+	blit3D->ShowCursor(false);
 
 	debugFont = blit3D->MakeAngelcodeFontFromBinary32("Media\\DebugFont_24.bin");
 	//from here on, we are setting up the Box2D physics world model
@@ -137,180 +200,494 @@ void Init()
 	world = new b2World(gravity);
 	//world->SetGravity(gravity); <-can call this to change gravity at any time
 	world->SetAllowSleeping(true); //set true to allow the physics engine to 'sleep" objects that stop moving
-
 	groundBody = CreateWindowEdges(blit3D->screenWidth, blit3D->screenHeight, world);
 
-	blit3D->ShowCursor(false);
+	contactListener = new ContactListener();
+	world->SetContactListener(contactListener);
+
 	sprites = new GameSprites(blit3D);
 
-	std::string level = "Levels\\" + std::to_string(levelNumber);
-	level += ".lvl";
-	bricks = ReadBricksFromFile(level, sprites);
-	theBrick = new Brick(sprites->movingPlatformSprites, 108, 30, 960, 300, 500.f, 0.1f, 1.2f);
-	theBrick->body->SetBullet(true);
-	theBall = new Ball(sprites->ballSprites.at(0), 24.f, 50.f, 100.f,
-		1.f, 0.1f, 1.2f, 0.f);
-	balls.push_back(theBall);
+	Brick* thePlatform = MakeBrick(sprites->movingPlatformSprites, 108, 30, 960, 300, 200.f, 0.f, 1.2f, CMASK_PADDLE, CMASK_BALL | CMASK_POWERUP);
+	Brick* theDouble = MakeBrick(sprites->movingPlatformSprites, 108, 30, 960, 300, 200.f, 0.1f, 1.5f, CMASK_PADDLE, CMASK_BALL | CMASK_POWERUP);
+	theDouble->Destroy();
+
+	platforms.push_back(thePlatform);
+	platforms.push_back(theDouble);
+
+	for each (Brick * b in platforms) {
+		b->typeID = ENTITY_PADDLE;
+		b->body->SetBullet(true);
+	}
+
+	ProceedToNextLevel();
 }
 
 void DeInit(void)
 {
 	//Free all physics game data we allocated
-
 	if (camera != NULL) delete camera;
 
+	for each (Brick * b in platforms) delete b;
+	for each (Brick * b in bricks) delete b;
+	for each (Ball * b in balls) delete b;
+	for each (Brick * p in powerups) delete p;
+
 	delete world;
-	delete theBall;
-	delete theBrick;
 	//any sprites/fonts still allocated are freed automatcally by the Blit3D object when we destroy it
 }
 
 void Update(double seconds)
 {
-	//stop it from lagging hard if more than a small amount of time has passed
-	if (seconds > 1.0 / 30) elapsedTime += 1.f / 30;
-	else elapsedTime += (float)seconds;
+	camera->Update((float)seconds);
+	camera->PanTo(960, 540);
 
-	if (kickBall)
+	switch (gameState)
 	{
-		kickBall = false;
-		KickBall(theBall);
+	case START:
+	{
+		camera->StopShaking();
 	}
+	break;
 
-	//don't apply physics unless at least a timestep worth of time has passed
-	while (elapsedTime >= timeStep)
+	case PLAYING:
 	{
-		camera->Update((float)seconds);
-		camera->PanTo(960, 540);
-		//update the physics world
-		world->Step(timeStep, velocityIterations, positionIterations);
+		if (seconds > 1.0 / 30) elapsedTime += 1.f / 30;
+		else elapsedTime += (float)seconds;
 
-		// Clear applied body forces.
-		world->ClearForces();
-		//waiting for the next level
+		//waiting for the next level to happen
 		nextLevel = true;
-		int bricksLeft = 0;
-
-		//updating bricks and applying shake
 		for each (Brick * b in bricks)
 		{
 			if (b->body->IsEnabled() == true)
 			{
 				//postponing, if there are blocks left
 				nextLevel = false;
-				bricksLeft++;
 			}
+		}
 
-			if (b->body->GetLinearVelocity().Length() > 0)
+		// if all balls were destroyed, the flag is raised and we move to the next level
+		if (nextLevel)	ProceedToNextLevel();
+
+		int entitiesLeft = 0;
+
+		//updating the balls
+		for (int i = balls.size() - 1; i >= 0; --i)
+		{
+			if (balls.at(i)->isDrawn)
 			{
-				camera->Shake(10.f * (b->spriteNumber + 1));
-				playerScore += (int)10 / (b->spriteNumber + 1);
-				b->body->SetLinearVelocity(b2Vec2(0.f, 0.f));
-				b->Destroy();
+				// old way of determining whether we are below the platform/near ground;
+				//TODO: Move to switch(typeID) tree and destroy on touching *the ground*
+				if (balls.at(i)->body->GetPosition().y < 5)
+				{
+					balls.at(i)->Destroy();
+				}
+				else
+				{
+					// counting if there are any balls in the air
+					// maybe should use: auto count = std::count_if(balls.begin(), balls.end(),[&](auto const& ball){ return ball->isDrawn == true; });
+					entitiesLeft++;
+				}
+
+				if (multipleBalls) { // applying the power-up
+					Ball* ball2 = MakeBall(sprites->ballSprites.at(0), 24.f, (balls.at(i)->body->GetPosition().x + 1) * PTM_RATIO, balls.at(i)->body->GetPosition().y * PTM_RATIO,
+						1.f, 0.1f, 1.2f, 0.f);
+					Ball* ball3 = MakeBall(sprites->ballSprites.at(0), 24.f, balls.at(i)->body->GetPosition().x * PTM_RATIO, (balls.at(i)->body->GetPosition().y + 1) * PTM_RATIO,
+						1.f, 0.1f, 1.2f, 0.f);
+
+					ball2->body->SetLinearVelocity(balls.at(i)->body->GetLinearVelocity());
+					ball3->body->SetLinearVelocity(balls.at(i)->body->GetLinearVelocity());
+
+					KickBall(ball2);
+					KickBall(ball3);
+
+					balls.push_back(ball2);
+					balls.push_back(ball3);
+				}
+
+				//check if we are not moving enough vertically
+				b2Vec2 dir = balls.at(i)->body->GetLinearVelocity();
+				float minAmountY = 30.f / PTM_RATIO;
+
+				// if less than minimum, set to minimum
+				if (dir.y < 0)
+				{
+					if (dir.y > -minAmountY)
+					{
+						dir.y = -minAmountY;
+					}
+				}
+				else
+				{
+					if (dir.y < minAmountY)
+					{
+						dir.y = minAmountY;
+					}
+				}
+				dir.Normalize();
+				dir *= balls.at(i)->body->GetLinearVelocity().Length(); //scale up the velocity tp correct ball speed
+				balls.at(i)->body->SetLinearVelocity(dir);
 			}
 		}
 
-		if (nextLevel)
+		// the power-up was applied
+		multipleBalls = false;
+
+		// if no balls are in the air, remove all unrendered balls + create one
+		// also, remove one life, as it would mean the player dropped every ball that has been created until now
+		if (entitiesLeft == 0)
 		{
-			ProceedToNextLevel();
+			playerLives--;
+			EraseBalls();
 		}
 
-		if (bricksLeft <= 5)
-		{
-			nextLevelAvailable = true;
-		}
+		// if ball has been respawned, move it with the platform
+		if (stickToYourPlatform) balls.at(0)->body->SetTransform(b2Vec2(cursor.x / PTM_RATIO, 35.7), 0);
 
-		//updating the platform, following the cursor
-		theBrick->body->SetTransform(b2Vec2(cursor.x / PTM_RATIO, 30), theBrick->body->GetAngle());
-		if (theBrick->body->GetAngle() != 0)
-		{
-			theBrick->body->SetAngularVelocity(-theBrick->body->GetAngle());
-		}
-		else
-		{
-			theBrick->body->SetAngularVelocity(0);
-		}
+		// if no lives left, Game Over
+		if (playerLives < 0) gameState = GAMEOVER;
 
-		//updating the ball
-
-		if (theBall->body->GetPosition().y < 5)
+		//don't apply physics unless at least a timestep worth of time has passed
+		while (elapsedTime >= timeStep)
 		{
-			lives--;
-			stickToYourPlatform = true;
-		}
+			// update passed time counter
+			elapsedTime -= timeStep;
 
-		if (stickToYourPlatform) {
-			theBall->body->SetTransform(b2Vec2(cursor.x / PTM_RATIO, 36), 0);
-		}
+			//update the physics world
+			world->Step(timeStep, velocityIterations, positionIterations);
 
-		//check if we are not moving enough vertically
-		b2Vec2 dir = theBall->body->GetLinearVelocity();
-		float minAmountY = 30.f / PTM_RATIO;
-		if (dir.y < 0)
-		{
-			if (dir.y > -minAmountY)
+			// Clear applied body forces.
+			world->ClearForces();
+
+			// Move the paddle to where it belongs
+			platforms.at(0)->MatchCursor(cursor.x, inclineLeft, inclineRight);
+			if (multiplePlatforms)
 			{
-				dir.y = -minAmountY;
+				platforms.at(1)->MatchCursor(blit3D->screenWidth - cursor.x, inclineLeft, inclineRight, true);
 			}
-		}
-		else
-		{
-			if (dir.y < minAmountY)
+			//update the particle list and remove dead particles
+			for (int i = particles.size() - 1; i >= 0; --i)
 			{
-				dir.y = minAmountY;
+				if (particles[i]->Update(timeStep))
+				{
+					//time to die!
+					delete particles[i];
+					particles.erase(particles.begin() + i);
+				}
+			}
+
+			//loop over contacts
+			for (int pos = 0; pos < contactListener->contacts.size(); ++pos)
+			{
+				Contact contact = contactListener->contacts[pos];
+
+				//fetch the entities from the body userdata
+				Entity* A = (Entity*)contact.fixtureB->GetBody()->GetUserData().pointer;  // Doesn't work and I'm not sure why....
+				Entity* B = (Entity*)contact.fixtureA->GetBody()->GetUserData().pointer;
+
+				if (A != NULL && B != NULL) //if there is an entity for these objects...
+				{
+					if (A->typeID == ENTITY_BALL)
+					{
+						//swap A and B
+						Entity* C = A;
+						A = B;
+						B = C;
+					}
+
+					if (B->typeID == ENTITY_BALL && A->typeID == ENTITY_SPINNER)
+					{
+					}
+
+					if (B->typeID == ENTITY_BALL && A->typeID == ENTITY_EDGE)
+					{
+					}
+
+					if (B->typeID == ENTITY_BALL && A->typeID == ENTITY_BRICK)
+					{
+						Brick* b = (Brick*)A;
+
+						//update the brick
+						b->Destroy();
+
+						//shake the screen
+						camera->Shake(10.f * (b->spriteNumber + 1));
+
+						//increase the score
+						playerScore += (int)10 / (b->spriteNumber + 1);
+
+						if (b->DropPowerUp())
+						{
+							int power;
+							if (dice.Roll1DN(100) > dice.Roll1DN(100))
+							{
+								power = 0;
+							}
+							else {
+								power = 1;
+							}
+							Brick* pUp = PowerUp(sprites->mossyHorizontalShortPlatformSprites, power, b);
+							powerups.push_back(pUp);
+						};
+
+						//add a particle effect
+						Particle* p = new Particle();
+						p->spriteList = sprites->collisionParticles;
+						p->rotationSpeed = 0;
+						p->angle = 0;
+						//let's make it 'follow' after the ball
+						b2Vec2 dir = B->body->GetLinearVelocity();
+						float speed = dir.Length() * PTM_RATIO;
+						dir.Normalize();
+						p->direction = dir;
+						p->startingSpeed = speed / 5;
+						p->targetSpeed = speed / 10;
+						p->totalTimeToLive = 0.2f;
+						//get coords of contact
+						p->coords = Physics2Pixels(contact.contactPoint);
+
+						particles.push_back(p);
+					}
+
+					if (B->typeID == ENTITY_BALL && A->typeID == ENTITY_GROUND) {}
+
+					//check and see if paddle or ground hit a powerup
+					if (A->typeID == ENTITY_POWERUP)
+					{
+						//swap A and B
+						Entity* C = A;
+						A = B;
+						B = C;
+					}
+
+					if (B->typeID == ENTITY_POWERUP)
+					{
+						if (A->typeID == ENTITY_PADDLE)
+						{
+							//shake the screen!
+							camera->Shake(5);
+
+							Brick* p = (Brick*)B;
+							if (p->powerUpNumber == 0) {
+								multipleBalls = true;
+
+								// disable multiple platforms on pick-up
+								multiplePlatforms = false;
+								platforms.at(1)->Destroy();
+							}
+							else if (p->powerUpNumber == 1) {
+								multiplePlatforms = true;
+								platforms.at(1)->Enable();
+							}
+						}
+					}
+				}//end of checking if they are both NULL userdata
+			}//end of collison handling
+
+			/*
+
+			If I cannot get the pointers to the object, we can still detect the changes in the bodies directly.
+			For example, since my bricks are dynamic bodies, if the speed of a brick is greater than zero, I know
+			that it was hit.
+
+			For power-ups, if the vertical direction of the movement is positive or the horizontal spreed is greater
+			than zero, we can be sure it hit the platform.
+
+			Sure, that limits us in many ways, by we still can process the "collisions" aftermath.
+
+						And it's also very ugly and inefficient, sorry.
+			*/
+
+			for each (Brick * b in bricks)
+			{
+				if (b->body->GetLinearVelocity().Length() > 0)
+				{
+					b->Destroy();
+					b->body->SetLinearVelocity(b2Vec2(0, 0));
+
+					//shake the screen
+					camera->Shake(10.f * (b->spriteNumber + 1));
+
+					//increase the score
+					playerScore += (int)10 / (b->spriteNumber + 1);
+
+					if (b->DropPowerUp())
+					{
+						int power;
+						if (dice.Roll1DN(100) > dice.Roll1DN(100))
+						{
+							power = 0;
+						}
+						else if (dice.Roll1DN(100) > dice.Roll1DN(70)) {
+							power = 1;
+						}
+						else {
+							power = 2;
+						}
+						Brick* pUp = PowerUp(sprites->mossyHorizontalShortPlatformSprites, power, b);
+
+						pUp->body->SetLinearVelocity(b2Vec2(0, -15));
+						pUp->body->SetAngularVelocity((float)(dice.Roll1DN(80) - 40) / 100);
+
+						powerups.push_back(pUp);
+					};
+
+					//add a particle effect
+					Particle* p = new Particle();
+					p->spriteList = sprites->collisionParticles;
+					p->rotationSpeed = 0;
+					p->angle = 0;
+
+					//let's make it 'follow' after the ball
+						// .....But since we don't have the pointer to the ball that hit the brick, let's find the closest one
+					float dist = std::numeric_limits<float>::infinity();
+					float temp;
+					b2Vec2 pointOfContact = b->body->GetPosition();
+
+					// I know it's a bad idea. And it also backfires quite often, however most of the time it works.
+					for each (Ball * a in balls) {
+						if (a->isDrawn) {
+							temp = std::sqrt((b->body->GetPosition().x - a->body->GetPosition().x) + (b->body->GetPosition().y - a->body->GetPosition().y));
+							if (temp < dist) {
+								dist = temp;
+								pointOfContact = b2Vec2((b->body->GetPosition().x + a->body->GetPosition().x) / 2, (b->body->GetPosition().y + a->body->GetPosition().y) / 2);
+							}
+						}
+					}
+					// simplified, as I don't know the direction the ball is moving to.
+					p->coords = Physics2Pixels(pointOfContact);
+					particles.push_back(p);
+				}
+			}
+
+			for each (Brick * p in powerups)
+			{
+				if (p->body->GetLinearVelocity().x != 0 || p->body->GetLinearVelocity().y > 0)
+				{
+					p->Destroy();
+					switch (p->powerUpNumber)
+					{
+					case 0:
+					{
+						multipleBalls = true;
+					}
+					break;
+					case 1:
+					{
+						multiplePlatforms = true;
+						platforms.at(1)->Enable();
+					}
+					break;
+					case 2:
+					{
+						// first, disable multiple platforms, because this powerup is quite OP
+						// and second platform doesn't make much difference anyway
+						platforms.at(1)->Destroy();
+						multiplePlatforms = false;
+
+						//shake the screen a lot!!!!
+						camera->Shake(150.f);
+						for each (Brick * b in bricks)
+						{
+							b->Destroy();
+							b->body->SetLinearVelocity(b2Vec2(0, 0));
+
+							//increase the score
+							playerScore += (int)9 / (b->spriteNumber + 1);
+						}
+					}
+					break;
+					default:
+						break;
+					}
+				}
 			}
 		}
-		dir.Normalize();
-		dir *= theBall->body->GetLinearVelocity().Length(); //scale up the velocity tp correct ball speed
-		theBall->body->SetLinearVelocity(dir);
-		//std::cout << theBall->body->GetLinearVelocity().Length() << " - " << vec2deg(theBall->body->GetLinearVelocity()) << std::endl;
-
-		elapsedTime -= timeStep;
 	}
+
+	for (int i = balls.size() - 1; i >= 0; --i)
+	{
+		if (!balls[i]->isDrawn) {
+			world->DestroyBody(balls[i]->body);
+			delete balls[i];
+			balls.erase(balls.begin() + i);
+		}
+	}
+
+	for (int i = powerups.size() - 1; i >= 0; --i)
+	{
+		if (!powerups[i]->isDrawn || powerups[i]->body->GetPosition().y < 0) {
+			world->DestroyBody(powerups[i]->body);
+			delete powerups[i];
+			powerups.erase(powerups.begin() + i);
+		}
+	}
+
+	break; //end case PLAYING
+
+	case GAMEOVER:
+		// cleaning may be unnecessary?
+		EraseBalls();
+	default:
+		break;
+	}
+	//end switch(gameState)
 }
 
 void Draw(void)
 {
-	glClearColor(0.8f, 0.6f, 0.7f, 0.0f);	//clear colour: r,g,b,a
+	glClearColor(0.8f, 0.9f, 0.9f, 0.0f);	//clear colour: r,g,b,a
 	// wipe the drawing surface clear
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	//transform the view by "drawing" the camera
 	camera->Draw();
-	//switch (gameState)
-	//{
-	//case START:
-		//logo->Blit(blit3D->screenWidth / 2, blit3D->screenHeight / 2);
-		//break;
 
-	//case PLAYING:
-		//loop over all entities and draw them
-		//for (auto& e : entityList) e->Draw();
-		//for (auto& b : brickEntityList) b->Draw();
-		//for (auto& b : ballEntityList) b->Draw();
-		//for (auto& p : particleList) p->Draw();
-
-		//std::string lifeString = "Lives: " + std::to_string(lives);
-		//debugFont->BlitText(20, 30, lifeString);
-		//break;
-	theBall->Draw();
-	theBrick->Draw();
-
-	for each (Brick * b in bricks) b->Draw();
-
-	if (nextLevelAvailable)
+	switch (gameState)
 	{
-		std::string proceed = "Press \"Enter\" to proceed to the next level";
-		debugFont->BlitText(1400, 70, proceed);
+	case START:
+	{
+
+		std::string lives = "Control paddle with mouse";
+		debugFont->BlitText(100, 100, lives);
+
+		std::string score = "Tilt the paddle with \"A\" and \"D\"";
+		debugFont->BlitText(100, 70, score);
+
+		sprites->intro->Blit(blit3D->screenWidth / 2, blit3D->screenHeight / 2);
+		std::string proceed = "Press \"Enter\" to proceed";
+		debugFont->BlitText(1500, 70, proceed);
 	}
+	break;
+	case PLAYING:
+	{
+		//loop over all entities and draw them
+		for each (auto & b in balls) b->Draw();
+		for each (auto & p in platforms) p->Draw();
+		for each (auto & p in powerups) p->Draw();
+		for each (auto & b in bricks) b->Draw();
+		for each (auto & p in particles) p->Draw();
 
-	std::string score = "Lives: " + std::to_string(lives);
-	debugFont->BlitText(50, 80, score);
+		if (nextLevelAvailable)
+		{
+			std::string proceed = "Press \"Enter\" to proceed to the next level";
+			debugFont->BlitText(1400, 70, proceed);
+		}
 
-	std::string score = "Score: " + std::to_string(playerScore);
-	debugFont->BlitText(50, 70, score);
-	//case GAMEOVER:
-	//}
+		std::string lives = "Lives: " + std::to_string(playerLives);
+		debugFont->BlitText(100, 100, lives);
+
+		std::string score = "Score: " + std::to_string(playerScore);
+		debugFont->BlitText(100, 70, score);
+	}
+	break;
+	case GAMEOVER:
+	{
+		sprites->outro->Blit(blit3D->screenWidth / 2, blit3D->screenHeight / 2);
+		std::string score = "~ " + std::to_string(playerScore)+ " ~";
+		debugFont->BlitText(blit3D->screenWidth / 2 - 50, 650, score);
+	}
+	break;
+	}
 
 	camera->UnDraw(); //turns off the camera transformation of the view coords
 }
@@ -318,17 +695,34 @@ void Draw(void)
 //the key codes/actions/mods for DoInput are from GLFW: check its documentation for their values
 void DoInput(int key, int scancode, int action, int mods)
 {
+	if (key == GLFW_KEY_ENTER && action == GLFW_PRESS && gameState == START)
+	{
+		gameState = PLAYING;
+	}
+
+	if (key == GLFW_KEY_ENTER && action == GLFW_PRESS && nextLevelAvailable)
+	{
+		ProceedToNextLevel();
+	}
+
 	if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
 		blit3D->Quit(); //start the shutdown sequence
 
 	if (key == GLFW_KEY_SPACE && action == GLFW_PRESS && stickToYourPlatform == true)
 	{
 		stickToYourPlatform = false;
-		kickBall = true;
+		KickBall(balls.at(0));
 	}
 
-	if (key == GLFW_KEY_ENTER && action == GLFW_PRESS && nextLevelAvailable)
-		ProceedToNextLevel();
+	if (key == GLFW_KEY_A && action == GLFW_PRESS)
+		inclineLeft = true;
+	if (key == GLFW_KEY_A && action == GLFW_RELEASE)
+		inclineLeft = false;
+
+	if (key == GLFW_KEY_D && action == GLFW_PRESS)
+		inclineRight = true;
+	if (key == GLFW_KEY_D && action == GLFW_RELEASE)
+		inclineRight = false;
 }
 
 void DoCursor(double x, double y)
@@ -357,3 +751,6 @@ int main(int argc, char* argv[])
 	blit3D->Run(Blit3DThreadModel::SINGLETHREADED);
 	if (blit3D) delete blit3D;
 }
+
+//TODO: Create an Update for Bricks to simplify setting the angle;
+//TODO: Move paddle to entity list / simplify Draw function

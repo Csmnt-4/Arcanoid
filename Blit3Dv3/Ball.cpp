@@ -1,19 +1,49 @@
 #include "Ball.h"
 #include "DieRoller.h"
+#include "CollisionMasks.h"
 
 extern std::mt19937 rng;
 std::uniform_int_distribution<> randomDegrees(30, 150);
 extern Blit3D* blit3D;
 extern b2World* world; //our physics engine
 
-Ball::Ball(Sprite* theSprite, float diameter, float xpos, float ypos,
+void Ball::Draw()
+{
+	if (isDrawn) {
+		//update the sprite locations based on the physics objects
+		b2Vec2 bposition = body->GetPosition();
+		bposition = Physics2Pixels(bposition);
+
+		//get the angle of the ball
+		float angle = body->GetAngle();
+		angle = glm::degrees(angle);
+
+		// Draw the objects
+		sprite->angle = angle;
+		sprite->Blit(bposition.x, bposition.y);
+	}
+}
+
+void Ball::Destroy()
+{
+	body->SetEnabled(false);
+	isDrawn = false;
+}
+
+Ball* MakeBall(Sprite* theSprite, float diameter, float xpos, float ypos,
 	float density, float friction, float restitution,
 	float angularDamping)
 {
-	sprite = theSprite;
+	Ball* ball = new Ball();
+
+	// maybe it'll fix it?....
+	ball->typeID = ENTITY_BALL;
+
+	ball->sprite = theSprite;
 	// Define the dynamic Ball body.
 	//We set its position and call the body factory.
 	b2BodyDef BallBodyDef;
+	BallBodyDef.bullet = true;
 	BallBodyDef.type = b2_dynamicBody; //make it a dynamic body i.e. one moved by the physics engine
 	BallBodyDef.position.Set(xpos / PTM_RATIO, ypos / PTM_RATIO); //set its position in the world
 
@@ -21,7 +51,7 @@ Ball::Ball(Sprite* theSprite, float diameter, float xpos, float ypos,
 	//to make it slow down as it rolls
 	BallBodyDef.angularDamping = angularDamping;
 
-	body = world->CreateBody(&BallBodyDef); //create the body and add it to the world
+	ball->body = world->CreateBody(&BallBodyDef); //create the body and add it to the world
 
 	// Define a ball shape for our dynamic body.
 	//A circle shape for our ball
@@ -30,6 +60,9 @@ Ball::Ball(Sprite* theSprite, float diameter, float xpos, float ypos,
 
 	//create the fixture definition - we don't need to save this
 	b2FixtureDef fixtureDef;
+
+	fixtureDef.filter.categoryBits = CMASK_BALL;
+	fixtureDef.filter.maskBits = CMASK_BRICK | CMASK_PADDLE | CMASK_EDGES;
 
 	// Define the dynamic body fixture.
 	fixtureDef.shape = &dynamicBall;
@@ -45,48 +78,58 @@ Ball::Ball(Sprite* theSprite, float diameter, float xpos, float ypos,
 	fixtureDef.restitution = restitution;
 
 	// Add the shape to the body.
-	body->CreateFixture(&fixtureDef);
-}
-
-void Ball::Draw()
-{
-	//update the sprite locations based on the physics objects
-	b2Vec2 bposition = body->GetPosition();
-	bposition = Physics2Pixels(bposition);
-
-	//get the angle of the ball
-	float angle = body->GetAngle();
-	angle = glm::degrees(angle);
-
-	// Draw the objects
-	sprite->angle = angle;
-	sprite->Blit(bposition.x, bposition.y);
+	ball->body->CreateFixture(&fixtureDef);
+	//body->SetBullet(true);
+	return ball;
 }
 
 void KickBall(Ball* ball)
 {
 	//kick the ball in a random direction
-
 	b2Vec2 dir = deg2vec(ball->body->GetAngle() + randomDegrees(rng));
 
 	//make the ball move
-	ball->body->SetLinearVelocity(b2Vec2(0.f, 0.f)); //remove all current velocity
 	dir *= 150.f * PTM_RATIO; //scale up the force
+	if (ball->body->GetLinearVelocity().Length() > 50)
+	{
+		dir *= ball->body->GetLinearVelocity().Length();
+	}
+
+	ball->body->SetLinearVelocity(b2Vec2(0.f, 0.f)); //remove all current velocity
 	ball->body->ApplyLinearImpulse(dir, ball->body->GetPosition(), true); //apply the "kick"
 }
 
-std::vector<Ball*> MultilplyToThree(Ball* ball, std::vector<Ball*> balls)
+std::vector<Ball*> MultilplyToThree(std::vector<Ball*> balls, GameSprites* sprites)
 {
+	std::vector<Ball*> newBalls;
 
+	for each (auto & ball in balls)
+	{
+		Ball* ball2 = MakeBall(sprites->ballSprites.at(0), 24.f, (ball->body->GetPosition().x + 1) * PTM_RATIO, ball->body->GetPosition().y * PTM_RATIO,
+			1.f, 0.1f, 1.2f, 0.f);
+		Ball* ball3 = MakeBall(sprites->ballSprites.at(0), 24.f, ball->body->GetPosition().x * PTM_RATIO, (ball->body->GetPosition().y + 1) * PTM_RATIO,
+			1.f, 0.1f, 1.2f, 0.f);
+
+		ball2->body->SetLinearVelocity(ball->body->GetLinearVelocity());
+		ball3->body->SetLinearVelocity(ball->body->GetLinearVelocity());
+
+		KickBall(ball2);
+		KickBall(ball3);
+
+		newBalls.push_back(ball);
+		newBalls.push_back(ball2);
+		newBalls.push_back(ball3);
+	}
+
+	return newBalls;
 }
-
 
 void KickBallUpAndToTheSide(Ball* ball)
 {
 	//kick the ball in a random direction
 	b2Vec2 dir;
 	if (ball->body->GetLinearVelocity().Length() > 10)
-	{	
+	{
 		if (vec2deg(ball->body->GetLinearVelocity()) > -150 && vec2deg(ball->body->GetLinearVelocity()) < -90) {
 			dir = deg2vec(-90 - vec2deg(ball->body->GetLinearVelocity()) + randomDegrees(rng));
 		}
