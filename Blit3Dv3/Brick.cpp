@@ -1,5 +1,4 @@
 #include "Brick.h"
-#include "DieRoller.h"
 #include "CollisionMasks.h"
 
 extern Blit3D* blit3D;
@@ -26,11 +25,12 @@ void Brick::Enable()
 	spriteNumber = 0;
 }
 
+//TODO: Create an Update for Bricks to simplify setting the angle;
+
 Brick* MakeBrick(std::vector<Sprite*> spriteList, float width, float height, float xpos, float ypos, float density, float friction, float restitution, short categoryBits, short maskBits)
 {
 	Brick* brick = new Brick();
-
-	brick->typeID = ENTITY_BRICK; // attempt to resolve the nullptr problem
+	brick->typeID = ENTITY_BRICK;
 	brick->sprites = spriteList;
 
 	// Define the dynamic Rectangle body.
@@ -40,7 +40,7 @@ Brick* MakeBrick(std::vector<Sprite*> spriteList, float width, float height, flo
 	bodyDef.angularDamping = 3.f;
 
 	//make the userdata point back to this entity
-	//bodyDef.userData.pointer = reinterpret_cast<uintptr_t>(brick);
+	bodyDef.userData.pointer = reinterpret_cast<uintptr_t>(brick);
 
 	brick->body = world->CreateBody(&bodyDef);
 
@@ -181,17 +181,23 @@ Brick* AddBrick(int x, int y, int brickType, GameSprites* sprites)
 	return brick;
 }
 
-Brick* PowerUp(std::vector<Sprite*> spriteList, int power, Brick* b)
+Brick* MakePowerUp(std::vector<Sprite*> spriteList, int power, Brick* b, DiceRoller dice)
 {
 	Brick* brick = new Brick();
+	brick->typeID = ENTITY_POWERUP;
+
 	std::vector<Sprite*> oneSpriteList;
 	oneSpriteList.push_back(spriteList.at(power));
 	brick->sprites = oneSpriteList;
+
 	// Define the dynamic Rectangle body.
 	b2BodyDef bodyDef;
 	bodyDef.type = b2_dynamicBody;
 	bodyDef.position.Set(b->body->GetPosition().x, b->body->GetPosition().y);
-	bodyDef.angularDamping = 3.f;
+	bodyDef.angularDamping = 0.f;
+
+	//make the userdata point back to this entity
+	bodyDef.userData.pointer = reinterpret_cast<uintptr_t>(brick);
 
 	brick->body = world->CreateBody(&bodyDef);
 
@@ -212,14 +218,52 @@ Brick* PowerUp(std::vector<Sprite*> spriteList, int power, Brick* b)
 	// Add the shape to the body.
 
 	brick->powerUpNumber = power;
-	brick->typeID = ENTITY_POWERUP;
 
 	brick->body->CreateFixture(&fixtureDef);
-	brick->body->SetAngularVelocity(1.2);
-	brick->body->SetLinearVelocity(b2Vec2(0, -10 * PTM_RATIO));
+	brick->body->SetAngularVelocity((float)(dice.Roll1DN(80) - 40) / 100);
+	brick->body->SetLinearVelocity(b2Vec2(0, -20));
 
 	return brick;
 }
+
+Brick* MakePaddle(std::vector<Sprite*> spriteList)
+{
+	Brick* brick = new Brick();
+	brick->typeID = ENTITY_PADDLE;
+	brick->sprites = spriteList;
+
+	// Define the dynamic Rectangle body.
+	b2BodyDef bodyDef;
+	bodyDef.type = b2_dynamicBody;
+	bodyDef.position.Set(960, 300);
+	bodyDef.angularDamping = 3.f;
+
+	//make the userdata point back to this entity
+	bodyDef.userData.pointer = reinterpret_cast<uintptr_t>(brick);
+
+	brick->body = world->CreateBody(&bodyDef);
+
+	// Define a rectangle shape for the body.
+	b2PolygonShape dynamicRectangle;
+	dynamicRectangle.SetAsBox(108 / (2 * PTM_RATIO), 30 / (2 * PTM_RATIO));
+
+	// Create the fixture definition.
+	b2FixtureDef fixtureDef;
+
+	fixtureDef.filter.categoryBits = CMASK_PADDLE;
+	fixtureDef.filter.maskBits = CMASK_BALL | CMASK_POWERUP;
+
+	fixtureDef.shape = &dynamicRectangle;
+	fixtureDef.density = 200.f;
+	fixtureDef.friction = 0.f;
+	fixtureDef.restitution = 1.2f;
+	// Add the shape to the body.
+
+	brick->body->CreateFixture(&fixtureDef);
+
+	return brick;
+}
+
 
 std::vector<Brick*> ReadBricksFromFile(std::string filename, GameSprites* sprites)
 {

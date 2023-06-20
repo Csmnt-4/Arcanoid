@@ -18,7 +18,6 @@ Blit3D* blit3D = NULL;
 #include "CollisionMasks.h"
 #include "Particle.h"
 #include "ContactListener.h"
-#include "DieRoller.h"
 
 //GLOBAL DATA
 std::mt19937 rng;
@@ -148,6 +147,8 @@ b2Body* CreateWindowEdges(int windowWidth, int windowHeight, b2World* world)
 	// Call the body factory which allocates memory for the ground body
 	// from a pool and creates the ground box shape (also from a pool).adadada
 	// The body is also added to the world.
+	//TODO: Switch to a distinct class initialization to descreetly detect collision with the ground.
+
 	b2Body* groundBody = world->CreateBody(&groundBodyDef);
 
 	//an EdgeShape object, for the ground
@@ -207,8 +208,8 @@ void Init()
 
 	sprites = new GameSprites(blit3D);
 
-	Brick* thePlatform = MakeBrick(sprites->movingPlatformSprites, 108, 30, 960, 300, 200.f, 0.f, 1.2f, CMASK_PADDLE, CMASK_BALL | CMASK_POWERUP);
-	Brick* theDouble = MakeBrick(sprites->movingPlatformSprites, 108, 30, 960, 300, 200.f, 0.1f, 1.5f, CMASK_PADDLE, CMASK_BALL | CMASK_POWERUP);
+	Brick* thePlatform = MakePaddle(sprites->movingPlatformSprites);
+	Brick* theDouble = MakePaddle(sprites->movingPlatformSprites);
 	theDouble->Destroy();
 
 	platforms.push_back(thePlatform);
@@ -381,7 +382,7 @@ void Update(double seconds)
 				Contact contact = contactListener->contacts[pos];
 
 				//fetch the entities from the body userdata
-				Entity* A = (Entity*)contact.fixtureB->GetBody()->GetUserData().pointer;  // Doesn't work and I'm not sure why....
+				Entity* A = (Entity*)contact.fixtureB->GetBody()->GetUserData().pointer;
 				Entity* B = (Entity*)contact.fixtureA->GetBody()->GetUserData().pointer;
 
 				if (A != NULL && B != NULL) //if there is an entity for these objects...
@@ -392,14 +393,6 @@ void Update(double seconds)
 						Entity* C = A;
 						A = B;
 						B = C;
-					}
-
-					if (B->typeID == ENTITY_BALL && A->typeID == ENTITY_SPINNER)
-					{
-					}
-
-					if (B->typeID == ENTITY_BALL && A->typeID == ENTITY_EDGE)
-					{
 					}
 
 					if (B->typeID == ENTITY_BALL && A->typeID == ENTITY_BRICK)
@@ -422,10 +415,13 @@ void Update(double seconds)
 							{
 								power = 0;
 							}
-							else {
+							else if (dice.Roll1DN(100) > dice.Roll1DN(70)) {
 								power = 1;
 							}
-							Brick* pUp = PowerUp(sprites->mossyHorizontalShortPlatformSprites, power, b);
+							else {
+								power = 2;
+							}
+							Brick* pUp = MakePowerUp(sprites->mossyHorizontalShortPlatformSprites, power, b, dice);
 							powerups.push_back(pUp);
 						};
 
@@ -434,14 +430,9 @@ void Update(double seconds)
 						p->spriteList = sprites->collisionParticles;
 						p->rotationSpeed = 0;
 						p->angle = 0;
-						//let's make it 'follow' after the ball
-						b2Vec2 dir = B->body->GetLinearVelocity();
-						float speed = dir.Length() * PTM_RATIO;
-						dir.Normalize();
-						p->direction = dir;
-						p->startingSpeed = speed / 5;
-						p->targetSpeed = speed / 10;
+
 						p->totalTimeToLive = 0.2f;
+
 						//get coords of contact
 						p->coords = Physics2Pixels(contact.contactPoint);
 
@@ -467,140 +458,47 @@ void Update(double seconds)
 							camera->Shake(5);
 
 							Brick* p = (Brick*)B;
-							if (p->powerUpNumber == 0) {
-								multipleBalls = true;
-
-								// disable multiple platforms on pick-up
-								multiplePlatforms = false;
-								platforms.at(1)->Destroy();
+							p->Destroy();
+							switch (p->powerUpNumber)
+							{
+							case 0:
+							{
+								// that would mean that we have already fired our 'main' ball,
+								// which would prevent us from having "you two go & you stay here" situations
+								if (stickToYourPlatform == false) multipleBalls = true;
 							}
-							else if (p->powerUpNumber == 1) {
+							break;
+							case 1:
+							{
 								multiplePlatforms = true;
 								platforms.at(1)->Enable();
 							}
-						}
-					}
-				}//end of checking if they are both NULL userdata
-			}//end of collison handling
+							break;
+							case 2:
+							{
+								// disable multiple platforms - first, because this powerup is quite OP
+								// and second, platform doesn't make much difference anyway
+								platforms.at(1)->Destroy();
+								multiplePlatforms = false;
 
-			/*
+								//shake the screen a lot!!!!
+								camera->Shake(250.f);
+								for each (Brick * b in bricks)
+								{
+									b->Destroy();
+									b->body->SetLinearVelocity(b2Vec2(0, 0));
 
-			If I cannot get the pointers to the object, we can still detect the changes in the bodies directly.
-			For example, since my bricks are dynamic bodies, if the speed of a brick is greater than zero, I know
-			that it was hit.
-
-			For power-ups, if the vertical direction of the movement is positive or the horizontal spreed is greater
-			than zero, we can be sure it hit the platform.
-
-			Sure, that limits us in many ways, by we still can process the "collisions" aftermath.
-
-						And it's also very ugly and inefficient, sorry.
-			*/
-
-			for each (Brick * b in bricks)
-			{
-				if (b->body->GetLinearVelocity().Length() > 0)
-				{
-					b->Destroy();
-					b->body->SetLinearVelocity(b2Vec2(0, 0));
-
-					//shake the screen
-					camera->Shake(10.f * (b->spriteNumber + 1));
-
-					//increase the score
-					playerScore += (int)10 / (b->spriteNumber + 1);
-
-					if (b->DropPowerUp())
-					{
-						int power;
-						if (dice.Roll1DN(100) > dice.Roll1DN(100))
-						{
-							power = 0;
-						}
-						else if (dice.Roll1DN(100) > dice.Roll1DN(70)) {
-							power = 1;
-						}
-						else {
-							power = 2;
-						}
-						Brick* pUp = PowerUp(sprites->mossyHorizontalShortPlatformSprites, power, b);
-
-						pUp->body->SetLinearVelocity(b2Vec2(0, -15));
-						pUp->body->SetAngularVelocity((float)(dice.Roll1DN(80) - 40) / 100);
-
-						powerups.push_back(pUp);
-					};
-
-					//add a particle effect
-					Particle* p = new Particle();
-					p->spriteList = sprites->collisionParticles;
-					p->rotationSpeed = 0;
-					p->angle = 0;
-
-					//let's make it 'follow' after the ball
-						// .....But since we don't have the pointer to the ball that hit the brick, let's find the closest one
-					float dist = std::numeric_limits<float>::infinity();
-					float temp;
-					b2Vec2 pointOfContact = b->body->GetPosition();
-
-					// I know it's a bad idea. And it also backfires quite often, however most of the time it works.
-					for each (Ball * a in balls) {
-						if (a->isDrawn) {
-							temp = std::sqrt((b->body->GetPosition().x - a->body->GetPosition().x) + (b->body->GetPosition().y - a->body->GetPosition().y));
-							if (temp < dist) {
-								dist = temp;
-								pointOfContact = b2Vec2((b->body->GetPosition().x + a->body->GetPosition().x) / 2, (b->body->GetPosition().y + a->body->GetPosition().y) / 2);
+									//increase the score
+									playerScore += (int)9 / (b->spriteNumber + 1);
+								}
+							}
+							default:
+								break;
 							}
 						}
 					}
-					// simplified, as I don't know the direction the ball is moving to.
-					p->coords = Physics2Pixels(pointOfContact);
-					particles.push_back(p);
-				}
-			}
-
-			for each (Brick * p in powerups)
-			{
-				if (p->body->GetLinearVelocity().x != 0 || p->body->GetLinearVelocity().y > 0)
-				{
-					p->Destroy();
-					switch (p->powerUpNumber)
-					{
-					case 0:
-					{
-						multipleBalls = true;
-					}
-					break;
-					case 1:
-					{
-						multiplePlatforms = true;
-						platforms.at(1)->Enable();
-					}
-					break;
-					case 2:
-					{
-						// first, disable multiple platforms, because this powerup is quite OP
-						// and second platform doesn't make much difference anyway
-						platforms.at(1)->Destroy();
-						multiplePlatforms = false;
-
-						//shake the screen a lot!!!!
-						camera->Shake(150.f);
-						for each (Brick * b in bricks)
-						{
-							b->Destroy();
-							b->body->SetLinearVelocity(b2Vec2(0, 0));
-
-							//increase the score
-							playerScore += (int)9 / (b->spriteNumber + 1);
-						}
-					}
-					break;
-					default:
-						break;
-					}
-				}
-			}
+				} //end of checking if they are both NULL userdata
+			} //end of collison handling
 		}
 	}
 
@@ -646,7 +544,6 @@ void Draw(void)
 	{
 	case START:
 	{
-
 		std::string lives = "Control paddle with mouse";
 		debugFont->BlitText(100, 100, lives);
 
@@ -683,7 +580,7 @@ void Draw(void)
 	case GAMEOVER:
 	{
 		sprites->outro->Blit(blit3D->screenWidth / 2, blit3D->screenHeight / 2);
-		std::string score = "~ " + std::to_string(playerScore)+ " ~";
+		std::string score = "~ " + std::to_string(playerScore) + " ~";
 		debugFont->BlitText(blit3D->screenWidth / 2 - 50, 650, score);
 	}
 	break;
@@ -692,7 +589,6 @@ void Draw(void)
 	camera->UnDraw(); //turns off the camera transformation of the view coords
 }
 
-//the key codes/actions/mods for DoInput are from GLFW: check its documentation for their values
 void DoInput(int key, int scancode, int action, int mods)
 {
 	if (key == GLFW_KEY_ENTER && action == GLFW_PRESS && gameState == START)
@@ -711,6 +607,8 @@ void DoInput(int key, int scancode, int action, int mods)
 	if (key == GLFW_KEY_SPACE && action == GLFW_PRESS && stickToYourPlatform == true)
 	{
 		stickToYourPlatform = false;
+		// magic numbers are bad, but the flag is only set
+		// when I have just created a new ball
 		KickBall(balls.at(0));
 	}
 
@@ -751,6 +649,3 @@ int main(int argc, char* argv[])
 	blit3D->Run(Blit3DThreadModel::SINGLETHREADED);
 	if (blit3D) delete blit3D;
 }
-
-//TODO: Create an Update for Bricks to simplify setting the angle;
-//TODO: Move paddle to entity list / simplify Draw function

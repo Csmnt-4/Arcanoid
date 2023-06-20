@@ -1,5 +1,4 @@
 #include "Ball.h"
-#include "DieRoller.h"
 #include "CollisionMasks.h"
 
 extern std::mt19937 rng;
@@ -42,16 +41,19 @@ Ball* MakeBall(Sprite* theSprite, float diameter, float xpos, float ypos,
 	ball->sprite = theSprite;
 	// Define the dynamic Ball body.
 	//We set its position and call the body factory.
-	b2BodyDef BallBodyDef;
-	BallBodyDef.bullet = true;
-	BallBodyDef.type = b2_dynamicBody; //make it a dynamic body i.e. one moved by the physics engine
-	BallBodyDef.position.Set(xpos / PTM_RATIO, ypos / PTM_RATIO); //set its position in the world
+	b2BodyDef bodyDef;
+	bodyDef.bullet = true;
+	bodyDef.type = b2_dynamicBody; //make it a dynamic body i.e. one moved by the physics engine
+	bodyDef.position.Set(xpos / PTM_RATIO, ypos / PTM_RATIO); //set its position in the world
+
+	//make the userdata point back to this entity
+	bodyDef.userData.pointer = reinterpret_cast<uintptr_t>(ball);
 
 	//friction won't work on a rolling circle in Box2D, so apply angular damping to the body
 	//to make it slow down as it rolls
-	BallBodyDef.angularDamping = angularDamping;
+	bodyDef.angularDamping = angularDamping;
 
-	ball->body = world->CreateBody(&BallBodyDef); //create the body and add it to the world
+	ball->body = world->CreateBody(&bodyDef); //create the body and add it to the world
 
 	// Define a ball shape for our dynamic body.
 	//A circle shape for our ball

@@ -5,9 +5,9 @@
 #include <random>
 
 #include "Physics.h"
+#include "DieRoller.h"
 #include "GameSprites.h"
 #include "Entity.h"
-
 
 class Ball : public Entity
 {

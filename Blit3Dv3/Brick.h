@@ -5,6 +5,7 @@
 #include "Physics.h"
 #include "GameSprites.h"
 #include "Entity.h"
+#include "DieRoller.h"
 
 class Brick : public Entity
 {
@@ -33,5 +34,8 @@ public:
 
 Brick* MakeBrick(std::vector<Sprite*> spriteList, float width, float height, float xpos, float ypos, float density, float friction, float restitution, short categoryBits, short maskBits);
 std::vector<Brick*> ReadBricksFromFile(std::string filename, GameSprites* sprites);
+Brick* MakePowerUp(std::vector<Sprite*> spriteList, int power, Brick* b, DiceRoller dice);
+Brick* MakePaddle(std::vector<Sprite*> spriteList);
+
+
 Brick* AddBrick(int x, int y, int brickType, GameSprites* sprites);
-Brick* PowerUp(std::vector<Sprite*> spriteList, int power, Brick* b);
